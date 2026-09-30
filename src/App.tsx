@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Hex } from 'viem';
 import { MAINNET, txLink, type Direction } from './config';
 import { format, units } from './amount';
-import { connectBase, connectStellar, baseProvider } from './wallets';
+import { connectBase, connectStellar, disconnectWallet, subscribeWallets, type StellarMethod } from './wallets';
+import { WalletDialog } from './WalletDialog';
+import { lobstrOpenLink } from './wallet-protocol';
 import { getBalance, quote, type Quote } from './quote';
 import { attachHash, claim, newTransfer, quoteClaim, reconcile, submitSource, type ClaimQuote } from './engine';
 import { canStartNew, clearTransfer, readTransfer, saveTransfer, STORAGE_KEY, withTransferLock, type Transfer } from './storage';
@@ -22,6 +24,9 @@ export function App() {
   const [q,setQuote]=useState<Quote|null>(null);const [balance,setBalance]=useState<bigint|null>(null);
   const [error,setError]=useState(initial.error);const [checking,setChecking]=useState(false);
   const [busy,setBusy]=useState(false);const [walletBusy,setWalletBusy]=useState('');
+  const [walletDialog,setWalletDialog]=useState<{chain:'stellar'|'base';uri:string}|null>(null);
+  const [walletAction,setWalletAction]=useState<'stellar'|'base'|null>(null);
+  const connectionAbort=useRef<AbortController|null>(null);
   const [review,setReview]=useState(false);const [claimQ,setClaimQuote]=useState<ClaimQuote|null>(null);
   const [hash,setHash]=useState('');const [refresh,setRefresh]=useState(0);
   const update=useCallback((t:Transfer)=>setTransfer({...t}),[]);
@@ -36,14 +41,16 @@ export function App() {
 
   useEffect(()=>{
     const changed=()=>{setQuote(null);setClaimQuote(null);setRefresh(v=>v+1);};
-    const accounts=(a:string[])=>{setBase((a[0]??'') as Hex|'');changed();};
-    baseProvider.on('accountsChanged',accounts);baseProvider.on('chainChanged',changed);
-    baseProvider.on('disconnect',()=>{setBase('');changed();});
+    const unsubscribe=subscribeWallets(event=>{
+      if(event.action){setWalletAction(event.action==='signing'?event.chain:null);return;}
+      if(event.address!==undefined){if(event.chain==='stellar')setStellar(event.address);else setBase(event.address as Hex|'');}
+      changed();
+    });
     const storage=(e:StorageEvent)=>{if(e.key===STORAGE_KEY){try{setTransfer(readTransfer());}catch(e){setError(errorText(e));}}};
     const focus=()=>changed();
     window.addEventListener('storage',storage);window.addEventListener('focus',focus);
     const timer=setInterval(changed,45000);
-    return ()=>{baseProvider.removeListener('accountsChanged',accounts);baseProvider.removeListener('chainChanged',changed);window.removeEventListener('storage',storage);window.removeEventListener('focus',focus);clearInterval(timer);};
+    return ()=>{unsubscribe();connectionAbort.current?.abort();window.removeEventListener('storage',storage);window.removeEventListener('focus',focus);clearInterval(timer);};
   },[]);
   useEffect(()=>{
     let alive=true;
@@ -78,13 +85,17 @@ export function App() {
     setBusy(true);setError('');
     try {await withTransferLock(action);}catch(e){setError(errorText(e));}finally{setBusy(false);}
   }
-  async function connect(which:'stellar'|'base') {
+  async function connect(which:'stellar'|'base',method:StellarMethod='walletconnect') {
+    const controller=new AbortController();connectionAbort.current=controller;
     setWalletBusy(which);setError('');
     try {
-      if(which==='stellar'){const a=await connectStellar();if(active&&a!==transfer.stellar)throw new Error(`Reconnect ${short(transfer.stellar)} to recover this transfer.`);setStellar(a);}
-      else{const a=await connectBase();if(active&&a.toLowerCase()!==transfer.base.toLowerCase())throw new Error(`Reconnect ${short(transfer.base)} to recover this transfer.`);setBase(a);}
-    }catch(e){setError(errorText(e));}finally{setWalletBusy('');}
+      if(which==='stellar'){const a=await connectStellar(method,uri=>setWalletDialog({chain:'stellar',uri}),controller.signal);if(active&&a!==transfer.stellar)throw new Error(`Reconnect ${short(transfer.stellar)} to recover this transfer.`);setStellar(a);}
+      else{const a=await connectBase(controller.signal);if(active&&a.toLowerCase()!==transfer.base.toLowerCase())throw new Error(`Reconnect ${short(transfer.base)} to recover this transfer.`);setBase(a);}
+      setWalletDialog(null);
+    }catch(e){if(!controller.signal.aborted)setError(errorText(e));setWalletDialog(d=>d?{...d,uri:''}:null);}
+    finally{if(connectionAbort.current===controller){connectionAbort.current=null;setWalletBusy('');}}
   }
+  function cancelConnection(){connectionAbort.current?.abort();setWalletDialog(null);setError('');}
   async function max() {
     if(!stellar||!base)return;setChecking(true);setError('');
     try{const b=await getBalance(direction,stellar,base);setBalance(b);setAmount(format(b));}catch(e){setError(errorText(e));}finally{setChecking(false);}
@@ -127,7 +138,7 @@ export function App() {
   const walletRow=(chain:'stellar'|'base',role:string)=>{
     const address=chain==='stellar'?stellar:base;
     const expected=active?(chain==='stellar'?transfer.stellar:transfer.base):address;
-    return <div className="wallet-row"><div className={`chain-icon ${chain}`} aria-hidden="true">{chain==='stellar'?'✦':'━'}</div><div className="wallet-info"><span className="eyebrow">{role}</span><strong>{chain==='stellar'?'Stellar':'Base'} <span className="network">Mainnet</span></strong></div><button className="wallet-button" onClick={()=>connect(chain)} disabled={!!walletBusy||busy}>{walletBusy===chain?'Connecting…':address?short(address):`Connect ${chain==='stellar'?'LOBSTR':'Coinbase Wallet'}`}</button>{expected&&!address&&<span className="saved-address">Saved: {short(expected)}</span>}</div>;
+    return <div className="wallet-row"><div className={`chain-icon ${chain}`} aria-hidden="true">{chain==='stellar'?'✦':'━'}</div><div className="wallet-info"><span className="eyebrow">{role}</span><strong>{chain==='stellar'?'Stellar':'Base'} <span className="network">Mainnet</span></strong></div><button className="wallet-button" onClick={()=>{setError('');setWalletDialog({chain,uri:''});}} disabled={!!walletBusy||busy}>{walletBusy===chain?'Connecting…':address?short(address):`Connect ${chain==='stellar'?'Stellar wallet':'Coinbase Wallet'}`}</button>{expected&&!address&&<span className="saved-address">Saved: {short(expected)}</span>}</div>;
   };
   const step=transfer?(transfer.stage==='complete'?3:['destination-ready','destination-pending'].includes(transfer.stage)?2:transfer.stage==='attestation'?1:0):0;
   return <main>
@@ -150,9 +161,11 @@ export function App() {
       </>}
       {error&&<div className="error" role="alert">{error}<button className="text-button" onClick={()=>{setError('');setRefresh(v=>v+1);}} disabled={busy}>Refresh checks</button></div>}
       {transfer&&((transfer.sourceRequest&&!transfer.sourceHash)||(transfer.destinationRequest&&!transfer.destinationHash)||(transfer.auxiliary?.request&&!transfer.auxiliary.hash))&&<div className="hash-recovery"><label htmlFor="hash">Recover the existing Base transaction</label><input id="hash" value={hash} onChange={e=>setHash(e.target.value)} placeholder="0x… transaction hash"/><button className="secondary" disabled={busy||!hash} onClick={()=>task(async()=>{const t=readTransfer();if(t)await attachHash(t,hash,update);})}>Check transaction</button></div>}
-      <details className="setup"><summary>Wallet setup & transfer recovery</summary><p>Use a desktop browser with the <a href="https://lobstr.co/signer-extension/" target="_blank" rel="noreferrer">LOBSTR signer extension</a> paired to your LOBSTR mobile app. Confirm Stellar transactions on your phone. Coinbase Wallet connects through its extension or mobile QR flow.</p><p>Add Circle’s native USDC to LOBSTR and keep spendable XLM above the account reserve. Keep ETH on Base for source transactions or a fallback claim. Approvals and archived Stellar data can require additional wallet actions.</p><p>Your current transfer is saved in this browser. Reopen this same URL and reconnect the same accounts to recover it. After a burn, use the existing transfer’s claim. Keep this browser’s site data until delivery is verified.</p></details>
+      <details className="setup"><summary>Wallet setup & transfer recovery</summary><p>On your phone, open this site inside Coinbase Wallet’s browser and connect Coinbase Wallet there. Connect your Stellar wallet with WalletConnect, tap Open LOBSTR, and return here after approval. Keep LOBSTR’s WalletConnect / Explore Apps screen open for signing requests. Desktop users can scan the QR code or use the <a href="https://lobstr.co/signer-extension/" target="_blank" rel="noreferrer">LOBSTR signer extension</a>.</p><p>Add Circle’s native USDC to LOBSTR and keep spendable XLM above the account reserve. Keep ETH on Base for source transactions or a fallback claim. Approvals and archived Stellar data can require additional wallet actions.</p><p>Your current transfer is saved in this browser. Reopen this same URL and reconnect the same accounts to recover it. After a burn, use the existing transfer’s claim. Keep this browser’s site data until delivery is verified.</p></details>
     </section>
     <footer><span>Native USDC only</span><a href="https://github.com/estevebadia/stellar-usdc-bridge" target="_blank" rel="noreferrer">Source & documentation</a></footer>
+    {walletDialog&&<WalletDialog chain={walletDialog.chain} uri={walletDialog.uri} busy={!!walletBusy} error={error} canOpenBrowser={!active} connected={walletDialog.chain==='stellar'?!!stellar:!!base} onConnect={method=>connect(walletDialog.chain,method)} onCancel={cancelConnection} onDisconnect={()=>{void disconnectWallet(walletDialog.chain).catch(e=>setError(errorText(e)));setError('');}}/>}
+    {walletAction==='stellar'&&<div className="wallet-action" role="status"><strong>Approve in your Stellar wallet</strong><p>In LOBSTR, open WalletConnect / Explore Apps to see this bridge’s request. Return to this browser afterwards.</p><a className="secondary" href={lobstrOpenLink}>Open LOBSTR</a></div>}
     {review&&q&&<div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="review-title"><span className="eyebrow">REVIEW BEFORE SIGNING</span><h2 id="review-title">{q.action==='approval'?'Approve native USDC':q.action==='restore'?'Restore Stellar data':'Confirm your transfer'}</h2><dl><div><dt>You send</dt><dd>{format(q.input.amount)} USDC</dd></div><div><dt>Maximum USDC fee</dt><dd>{format(q.fee)} USDC</dd></div><div><dt>Estimated received</dt><dd>{format(q.receive)} USDC</dd></div><div><dt>{outbound?'XLM':'ETH'} network estimate</dt><dd>{format(q.sourceCost,outbound?7:18)} {outbound?'XLM':'ETH'}</dd></div>{!outbound&&<div><dt>Stellar claim estimate</dt><dd>{q.destinationCost!==null?`${format(q.destinationCost,7)} XLM`:'Quoted after attestation'}</dd></div>}</dl><div className="review-address"><span>Destination · {outbound?'Base':'Stellar'} mainnet</span><code>{outbound?q.input.base:q.input.stellar}</code></div><p>{q.action==='approval'?'Approve only this transfer amount. The burn fee will be simulated and shown next, before a separate confirmation.':q.action==='restore'?'Archived contract data must be restored first. The burn will be simulated and reviewed afterwards.':outbound?'Circle forwarding will attempt delivery on Base. If needed, recover with a Coinbase Wallet claim and ETH.':'After Circle attestation, confirm a Stellar claim in LOBSTR. Its XLM fee is simulated before you sign.'}</p>{!outbound&&q.destinationCost===null&&<p>The claim estimate is currently unavailable. Keep spendable XLM in LOBSTR; additional funding may be needed to finish delivery.</p>}<button className="primary" disabled={busy||!!transfer?.auxiliary||q.expiresAt<Date.now()} onClick={confirm}>{busy?'Check your wallet…':q.action==='approval'?'Approve USDC':q.action==='restore'?'Restore data':'Transfer USDC'}</button><button className="secondary" onClick={()=>setReview(false)} disabled={busy}>Back</button>{error&&<p className="error" role="alert">{error}</p>}</section></div>}
   </main>;
 }

@@ -4,8 +4,10 @@ A small, non-custodial browser app for native USDC between Stellar mainnet and B
 
 ## Wallet prerequisites
 
-* **Stellar / LOBSTR:** use a desktop Chrome, Brave, Opera, or Edge browser with the [LOBSTR signer extension](https://lobstr.co/signer-extension/) paired to the LOBSTR mobile app. The vendor documents Soroban support. The official `@lobstrco/signer-extension-api` signs prepared Soroban XDRs and returns them for this app to submit. Confirm on your phone. Generic WalletConnect is deliberately not assumed to support these Soroban transactions. No private keys or recovery phrases are requested by the app.
-* **Base / Coinbase Wallet:** Coinbase Wallet SDK with `eoaOnly` connects an existing wallet through its extension or mobile QR flow. The app requests Base mainnet (chain ID 8453) and checks chain and account again before each transaction. Coinbase Smart Wallet is outside this app's scope.
+* **Stellar / LOBSTR on your phone:** choose **Connect Stellar wallet → WalletConnect**, then tap **Open LOBSTR** on the same phone (or scan the QR from another screen). Approve the connection, return to the bridge, and keep LOBSTR's **WalletConnect / Explore Apps** screen open for signing requests. Current [LOBSTR documentation explicitly covers Soroban transactions through WalletConnect](https://lobstr.freshdesk.com/support/solutions/articles/151000195339-lobstr-loyalty-program-and-how-it-benefits-you). The app requires the `stellar:pubnet` namespace and the [sign-only `stellar_signXDR` method](https://docs.reown.com/advanced/multichain/rpc-reference/stellar-rpc), checks the returned mainnet signature and unchanged transaction hash, then persists the signed envelope before submitting it. It never requests `stellar_signAndSubmitXDR`. Wallets that cannot grant the required method/account are rejected. The generic Stellar label reflects protocol support; the phone handoff is focused on LOBSTR.
+* **Stellar / desktop fallback:** the working [LOBSTR signer extension](https://lobstr.co/signer-extension/) remains available, paired to the LOBSTR mobile app. No private keys or recovery phrases are requested by the app.
+* **Base / Coinbase Wallet on your phone:** choose **Connect Coinbase Wallet → Open in Coinbase Wallet** before starting a transfer. This opens the bridge in the wallet's browser; tap **Connect this Coinbase Wallet** there, and connect Stellar via WalletConnect from that same browser. The app uses the injected Coinbase provider when present. Coinbase's current integration uses a separate dapp-browser handoff, not a standard WalletConnect relay ([Reown's implementation](https://github.com/reown-com/appkit/blob/main/packages/controllers/src/utils/MobileWallet.ts)). We therefore do not present a misleading Coinbase WalletConnect option. Desktop extension/QR connections retain the official Coinbase Wallet SDK with `eoaOnly`, initialized when connecting. The app requests Base mainnet (8453) and checks chain and account before each transaction; Smart Wallet is outside this app's scope.
+* **Connection recovery:** click a connected address to disconnect/reconnect. A connection can be cancelled and times out after two minutes; late approvals are discarded. Clear the old connection inside the wallet if prompts do not appear. Disconnecting a wallet never clears the transfer recovery record. When reconnecting after a burn, stay in the **same browser profile**, including the same wallet browser: Safari/Chrome and Coinbase's browser do not share local transfer state.
 * Have native Circle USDC, not a wrapped or bridged imitation. Add native USDC in LOBSTR, activate the Stellar account, keep XLM above the account/subentry reserve, and ensure an authorized trustline with sufficient receiving capacity. Keep ETH on Base for source transactions and for a manual fallback claim, if needed. LOBSTR account setup is done in LOBSTR, with a link and a refresh action in the app.
 
 ## Delivery methods and wallet actions
@@ -68,10 +70,12 @@ If a Base transaction is replaced or cancelled, recently mined replacements are 
 
 ## Local setup
 
-Requires Node.js 22.12+ (tested on Node.js 24) and npm. No API key, wallet secret, WalletConnect project ID, database, or application login is needed.
+Requires Node.js 22.12+ (tested on Node.js 24) and npm. No wallet secret, database, or application login is needed. Mobile Stellar WalletConnect needs a Reown project ID configured by the site owner; visitors do not need a Reown account.
 
 ```sh
 npm ci
+cp .env.example .env.local
+# Set VITE_WALLETCONNECT_PROJECT_ID to your Reown project ID
 npm run dev
 npm run check
 npm test
@@ -80,7 +84,11 @@ npm run test:testnet
 npm run build
 ```
 
-The build is a static Vite/React application in `dist/`. Wallet libraries were chosen for the documented signing path: official LOBSTR API, Coinbase Wallet SDK, Stellar SDK, and viem for EVM calls/Base gas estimates. See the checked-in lockfile for exact dependencies.
+The build is a static Vite/React application in `dist/`. Wallet libraries: WalletConnect Sign Client for Stellar phone signing, official LOBSTR API for the desktop fallback, Coinbase Wallet SDK/injected provider for Base, Stellar SDK, and viem for EVM calls/Base gas estimates. The small QR dialog supports explicit user-tapped handoffs instead of automatically opening a wallet before a pairing request is ready. See the checked-in lockfile for exact dependencies.
+
+## WalletConnect setup
+
+Create a free project in the [Reown dashboard](https://dashboard.reown.com). Set `VITE_WALLETCONNECT_PROJECT_ID` in `.env.local` or `.env.production.local` **before building**; Vite embeds this public identifier in the client bundle. The files are ignored by Git. For this hosted instance, allow `https://stellar-usdc-bridge-esteve.esteveb.chatgpt.site` as an origin. Localhost/127.0.0.1 are permitted for development. [Allowlist changes can take 15 minutes](https://docs.reown.com/cloud/relay). Do not commit dashboard credentials, API secrets, or wallet keys. GitHub CI checks the unconfigured build, which keeps the extension available and clearly disables mobile pairing; production publication must use the owner's configured project ID. WalletConnect's SDK retains pairing/session keys in browser storage to restore sessions; these are connection keys, not wallet private keys. The app itself saves only the selected session topic.
 
 ## Deployment through ChatGPT Sites
 
@@ -92,4 +100,4 @@ To deploy your own copy, register a new Site and replace the project ID with its
 
 [docs/VALIDATION.md](docs/VALIDATION.md) records what was actually exercised. Unit tests cover fund-changing arithmetic, recipient/hook encodings, route constants, both burn constructions, account prerequisites, fee arithmetic, attestation integrity, and interruption recovery. Live mainnet probes are read-only. Testnet probes check deployed contracts and both transaction constructions; they simulate an unfunded Stellar burn and require rejection. Neither direction has been completed end to end with funded test USDC and both wallet sessions. No mainnet funds were moved during development, and no independent security audit has been performed.
 
-Public RPCs and Iris can be rate limited or unavailable. Reconciliation preserves the transfer during outages. LOBSTR signing was checked against the vendor's integration/API, but an actual paired mobile wallet session was not available for end-to-end verification.
+Public RPCs and Iris can be rate limited or unavailable. Reconciliation preserves the transfer during outages. The user reported the desktop LOBSTR signer works. New phone paths are checked against vendor/protocol documentation and mocked sessions; actual iOS/Android paired wallet execution still requires user validation.

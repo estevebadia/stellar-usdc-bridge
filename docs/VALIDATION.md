@@ -22,3 +22,15 @@ The app has no independent security audit. Public RPC reliability, actual wallet
 ## Release verification
 
 The deployed revision must equal the public GitHub source revision and the Sites saved-version revision. Before handoff, verify the Site's native deployment state is `succeeded`, access mode is `public`, and a cookie-free request loads the application without a ChatGPT sign-in redirect. Deployment results are reported in the delivery message; runtime publication identifiers and credentials are not committed as validation data.
+
+## Phone connection update
+
+The user reported the desktop LOBSTR signer worked. This is user feedback, not a development-environment funds test. Phone signing was researched against current LOBSTR WalletConnect/Soroban documentation and Reown's Stellar sign-only RPC documentation. Coinbase's current Reown integration explicitly distinguishes its dapp-browser handoff from a WalletConnect relay.
+
+Added automated checks cover: mainnet-only sign-only namespaces; expired/wrong-network/wrong-account/submit-only sessions; exact original Soroban burn signature verification and rejection of modified transactions, other signers and testnet signatures; pairing/session restoration; cancelled pairing with late approval; connection timeout; session deletion/disconnection preserving the existing burn and recovery lock; lazy Coinbase injected-provider selection; Base network switching/account rechecking; cancelled Coinbase connections and fresh reconnection; and encoded native/universal mobile links. These tests use mocked wallet sessions and ephemeral test signatures, not real wallet approvals.
+
+Browser preview checks cover connection choices, missing project setup, desktop fallback, Coinbase phone links and cancellation. Actual phone app pairing, Soroban signing on iOS/Android, Coinbase in-app connection and wallet-to-browser return behavior remain to be verified on the user's device. Neither new phone path is claimed as a completed funded end-to-end transfer.
+
+Reown wallet directory was checked with the owner’s project: LOBSTR advertises `stellar:pubnet`, `supports_wc: true`, and native link `lobstr://`. The hosted origin is allowlisted in that project. Its project ID is supplied through ignored build environment files and not committed to the public repository.
+
+With the owner’s configured Reown project, the local browser generated a live WalletConnect v2 pairing QR and correctly encoded LOBSTR link. Cancellation returned to the disconnected form without a transaction request. No wallet approved that test pairing.
