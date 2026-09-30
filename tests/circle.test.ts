@@ -30,6 +30,11 @@ describe('attestation validation',()=>{
   });
 });
 describe('route fee quote',()=>{
+  it('counts a source minimum fee once, then adds forwarding',async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockImplementation(async()=>new Response(JSON.stringify([{finalityThreshold:2000,minimumFee:1,forwardFee:{high:57000}}]))));
+    expect(await circleFee('stellar-base',1000000n,100n)).toBe(57100n);
+    expect(await circleFee('stellar-base',1000000n,200n)).toBe(57200n);
+  });
   it('selects Standard by threshold, not array position; high forwardFee is in SIX decimal units',async()=>{
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify([{finalityThreshold:1000,minimumFee:13,forwardFee:{high:90000}},{finalityThreshold:2000,minimumFee:0,forwardFee:{high:57000}}]))));
     expect(await circleFee('stellar-base',1000000n)).toBe(57000n);

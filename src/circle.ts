@@ -7,11 +7,14 @@ import type { Transfer } from './storage';
 import { jsonFetch } from './accounts';
 
 interface FeeRow {finalityThreshold:number;minimumFee:number;forwardFee?:{high:number}}
-export async function circleFee(direction:Direction,amount:bigint) {
+export async function circleFee(direction:Direction,amount:bigint,sourceMinimum=0n) {
   const rows = await jsonFetch<FeeRow[]>(`${MAINNET.circle}/v2/burn/USDC/fees/${sourceDomain(direction)}/${destinationDomain(direction)}${direction==='stellar-base'?'?forward=true':''}`);
   const row = rows.find(r=>r.finalityThreshold===2000);
   if (!row) throw new Error('Circle did not quote a Standard transfer for this route.');
   let fee=feeForBps(amount,row.minimumFee);
+  // A live onchain fee switch and the API describe the same protocol fee.
+  // Cover the larger requirement once, then add forwarding separately.
+  if(sourceMinimum>fee)fee=sourceMinimum;
   if (direction==='stellar-base') {
     if (!row.forwardFee || !Number.isSafeInteger(row.forwardFee.high)||row.forwardFee.high<=0) throw new Error('Circle forwarding is unavailable for this route. Try again later.');
     fee+=BigInt(row.forwardFee.high); // live high quote; UI identifies maxFee/receive estimate

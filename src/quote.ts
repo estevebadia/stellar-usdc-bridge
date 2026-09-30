@@ -24,21 +24,19 @@ export async function quote(input:Input):Promise<Quote> {
   stellarAccount(input.stellar); evmBytes32(input.base);
   if(input.amount<=0n) throw new Error('Enter an amount greater than zero.');
   await checkNetworks();
+  const outbound=input.direction==='stellar-base';
+  const sourceMinimum=outbound?stellarRead(input.stellar,MAINNET.stellar.messenger,'get_min_fee_amount',[
+    new Address(STELLAR_USDC).toScVal(),(await import('./clients')).i128(canonicalToStellar(input.amount)),
+  ]).then(v=>ceilDiv(BigInt(v as bigint),10n)):Promise.resolve(0n);
   const [stellar,balance,eth,fee0,decimals] = await Promise.all([
     loadStellarAccount(input.stellar),getBalance(input.direction,input.stellar,input.base),
-    baseClient.getBalance({address:input.base}),circleFee(input.direction,input.amount),
+    baseClient.getBalance({address:input.base}),sourceMinimum.then(min=>circleFee(input.direction,input.amount,min)),
     baseClient.readContract({address:MAINNET.base.usdc,abi:TOKEN_ABI,functionName:'decimals'}),
   ]);
   if(decimals!==6) throw new Error('Base asset precision mismatch. Transfer blocked.');
   if(input.amount>balance) throw new Error('Amount exceeds your spendable native USDC balance.');
-  const outbound=input.direction==='stellar-base';
-  let fee=fee0;
-  if(outbound) {
-    const minLocal=BigInt(await stellarRead(input.stellar,MAINNET.stellar.messenger,'get_min_fee_amount',[
-      new Address(STELLAR_USDC).toScVal(),(await import('./clients')).i128(canonicalToStellar(input.amount)),
-    ]) as bigint);
-    fee += ceilDiv(minLocal,10n); // Any source fee switch is checked against live contract.
-  } else {
+  const fee=fee0;
+  if(!outbound) {
     if(receivingCapacity(stellar.account)<input.amount) throw new Error('Your Stellar USDC trustline has insufficient receiving capacity. Increase its limit in LOBSTR, then refresh.');
   }
   const receive=netAmount(input.amount,fee);
