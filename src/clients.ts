@@ -50,10 +50,10 @@ export async function estimateBase(from:EvmAddress,to:EvmAddress,data:Hex) {
 // estimate, fetched anew. A claim is separately simulated when attestation arrives.
 export async function estimateStellarClaim(): Promise<bigint | null> {
   try {
-    const latest = await stellarClient.getLatestLedger();
-    const events = await stellarClient.getEvents({startLedger:latest.sequence-10000,filters:[{type:'contract',contractIds:[MAINNET.stellar.forwarder]}],limit:10});
+    const {latestLedger} = await stellarClient.getHealth();
+    const events = await stellarClient.getEvents({startLedger:latestLedger-10000,filters:[{type:'contract',contractIds:[MAINNET.stellar.forwarder]}],limit:10});
     for (const event of [...events.events].reverse()) {
-      if (!event.inSuccessfulContractCall) continue;
+      if (event.inSuccessfulContractCall === false) continue;
       const tx = await jsonFetch<{successful:boolean;fee_charged:string}>(`${MAINNET.stellar.horizon}/transactions/${event.txHash}`);
       if (tx.successful) return ceilDiv(BigInt(tx.fee_charged)*150n,100n);
     }

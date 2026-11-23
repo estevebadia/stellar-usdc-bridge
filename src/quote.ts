@@ -4,7 +4,7 @@ import { MAINNET, STELLAR_USDC, type Direction } from './config';
 import { netAmount, canonicalToStellar, ceilDiv, stellarToCanonical } from './amount';
 import { evmBytes32, stellarAccount } from './encoding';
 import { loadStellarAccount, receivingCapacity, spendableUsdc } from './accounts';
-import { baseClient, checkNetworks, estimateBase, estimateStellarClaim, prepareStellar, stellarRead } from './clients';
+import { baseClient, checkNetworks, estimateBase, estimateStellarClaim, prepareStellar, stellarClient, stellarRead } from './clients';
 import { circleFee } from './circle';
 import { baseApproveData, baseBurnData, stellarApproveArgs, stellarBurnArgs, TOKEN_ABI } from './transactions';
 
@@ -48,9 +48,18 @@ export async function quote(input:Input):Promise<Quote> {
   const q:Quote={input,expiresAt:Date.now()+60000,fee,receive,balance,allowance,needsApproval,
     sourceCost:0n,destinationCost:null,stellarXlm:stellar.xlm,baseEth:eth,action:needsApproval?'approval':'burn'};
   if(outbound) {
-    const latest=await (await import('./clients')).stellarClient.getLatestLedger();
-    const prepared=await prepareStellar(input.stellar,needsApproval?STELLAR_USDC:MAINNET.stellar.messenger,
-      needsApproval?'approve':'deposit_for_burn_with_hook',needsApproval?stellarApproveArgs(input.stellar,input.amount,latest.sequence+720):stellarBurnArgs(input.stellar,input.amount,fee,input.base));
+    let prepared: Awaited<ReturnType<typeof prepareStellar>>;
+    if (needsApproval) {
+      const {latestLedger, status} = await stellarClient.getHealth();
+      if (status !== 'healthy' || !Number.isSafeInteger(latestLedger) || latestLedger <= 0) {
+        throw new Error('Could not check the current Stellar ledger. Refresh the fee quote.');
+      }
+      prepared = await prepareStellar(input.stellar, STELLAR_USDC, 'approve',
+        stellarApproveArgs(input.stellar, input.amount, latestLedger + 720));
+    } else {
+      prepared = await prepareStellar(input.stellar, MAINNET.stellar.messenger, 'deposit_for_burn_with_hook',
+        stellarBurnArgs(input.stellar, input.amount, fee, input.base));
+    }
     q.stellarPrepared=prepared; q.sourceCost=prepared.fee;
     if(prepared.restore) q.action='restore';
     if(stellar.xlm<prepared.fee) throw new Error('Add XLM to LOBSTR for the simulated network fee, above your account reserve.');
